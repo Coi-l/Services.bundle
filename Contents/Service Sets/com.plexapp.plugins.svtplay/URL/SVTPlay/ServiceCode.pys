@@ -1,3 +1,5 @@
+import re
+
 BASE_URL = "http://www.svtplay.se"
 SWF_TAG = "PLAYER_SWF="
 SWF_PLAYER = BASE_URL + "/public/swf/video/svtplayer-2012.11.swf"
@@ -7,6 +9,7 @@ QUAL_MED = 850
 QUAL_LOW_H = 340
 QUAL_LOW = 320
 BITRATES = [QUAL_HD, QUAL_HIGH, QUAL_MED, QUAL_LOW_H, QUAL_LOW]
+res2bitrate = {1280 : 2400, 1024 : 1400, 640 : 850, 480 : 320}
 ####################################################################################################
 
 def MetadataObjectForURL(url):
@@ -85,7 +88,7 @@ def PlayVideo(url, bitrate):
         if bitrate == QUAL_HD:
             bitrate = QUAL_HIGH #Live HD streams won't play in Plex for some reason
 
-    d = extractContentURLS(videos)
+    d = extractContentURLs(videos)
     rtmpurl = getContentBitrateURLs(d, bitrate)
     Log(rtmpurl)
     return IndirectResponse(VideoClipObject, key = RTMPVideoURL(url=rtmpurl, swf_url=playerurl, live=live))
@@ -94,7 +97,7 @@ def PlayVideo(url, bitrate):
 def NormalizeURL(url):
     return url
 ####################################################################################################
-def extractContentURLS(json):
+def extractContentURLs(json):
     d = dict()
     for bitrate in BITRATES:
         for v in json["video"]["videoReferences"]:
@@ -102,6 +105,49 @@ def extractContentURLS(json):
                 if(v["url"].find("rtmp") > -1):
                     d[bitrate] = v["url"]
                     break;
+
+    if len(d) == 0: #if no urls are found using the first way, try using bitrate=0 and m3u8 files
+        for v in json["video"]["videoReferences"]:
+            if(int(v["bitrate"]) == 0):
+                if(v["playerType"] == "ios"):
+                    m3u8 = v["url"]
+                    quals = HTTP.Request(m3u8).content
+                    d = findm3u8Content(quals)
+                    Log("dictionary:")
+                    Log(d)
+                elif(v["playerType"] == "flash"):
+                    Log("No support for f4m files at the moment")
+
+    return d
+
+def findm3u8Content(content):
+    d = dict()
+    lines = content.split('\n')
+    if lines[0].startswith("#EXTM3U"):
+        lines = lines[1:]
+    
+    resfind = re.compile("RESOLUTION=(\d*)")
+
+    while(len(lines) > 0):
+        item = lines[0:2]
+        Log(item)
+
+        if len(item) < 2:
+           break
+
+        lines = lines[2:]
+        res = resfind.findall(item[0]) 
+        if len(res) > 0:
+            res = int(res[0])
+            try:
+                d[res2bitrate[res]] = item[1]
+                Log("res:" + str(res))
+                Log(item[1])
+            except KeyError:
+                Log("No bitrate for: " + str(res))
+                pass
+        else:
+            d[QUAL_LOW] = item[1]
     return d
  
 def getContentBitrateURLs(d, bitrate):
